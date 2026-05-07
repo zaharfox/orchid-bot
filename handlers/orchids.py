@@ -3,11 +3,12 @@ from aiogram.types import Message, CallbackQuery
 from aiogram.filters import Command
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
+from aiogram.utils.keyboard import InlineKeyboardBuilder
 from datetime import date
 
 from database.db import (
     get_user_orchids, get_orchid, add_orchid,
-    update_orchid_care, delete_orchid
+    update_orchid_care, delete_orchid, add_care_history, get_care_history
 )
 from utils.keyboards import (
     orchids_list_keyboard, orchid_actions_keyboard,
@@ -66,8 +67,6 @@ async def view_orchid(callback: CallbackQuery):
         await callback.answer("Орхидея не найдена", show_alert=True)
         return
 
-    # o: 0=id,1=user_id,2=name,3=species,4=color,5=last_watered,
-    #    6=last_fertilized,7=last_repotted,8=watering_interval,9=fertilizing_interval
     today = date.today()
 
     def days_info(last_date_str, interval):
@@ -86,7 +85,7 @@ async def view_orchid(callback: CallbackQuery):
     text = f"""
 {emoji} <b>{orchid[2]}</b>
 📌 Вид: {orchid[3]}
-🎨 Цвет: {orchid[4] or 'не указан'}
+🎨 Цвет цветков: {orchid[4] or 'не указан'}
 
 <b>График ухода:</b>
 💧 Полив: {days_info(orchid[5], orchid[8])}
@@ -95,9 +94,111 @@ async def view_orchid(callback: CallbackQuery):
 
 📝 Заметки: {orchid[11] or 'нет'}
 """
+    builder = InlineKeyboardBuilder()
+    builder.button(text="🔍 Проверить корни", callback_data=f"check_roots_{orchid_id}")
+    builder.button(text="💧 Полил", callback_data=f"care_water_{orchid_id}")
+    builder.button(text="🌿 Подкормил", callback_data=f"care_fertilize_{orchid_id}")
+    builder.button(text="🪴 Пересадил", callback_data=f"care_repot_{orchid_id}")
+    builder.button(text="📋 История ухода", callback_data=f"orchid_history_{orchid_id}")
+    builder.button(text="🗑️ Удалить", callback_data=f"orchid_delete_{orchid_id}")
+    builder.button(text="◀️ К списку", callback_data="my_orchids")
+    builder.adjust(1, 2, 2, 1, 1)
+
+    await callback.message.edit_text(text, reply_markup=builder.as_markup(), parse_mode="HTML")
+
+
+@router.callback_query(F.data.startswith("check_roots_"))
+async def check_roots(callback: CallbackQuery):
+    orchid_id = int(callback.data.split("_")[-1])
+    orchid = await get_orchid(orchid_id, callback.from_user.id)
+    if not orchid:
+        await callback.answer("Орхидея не найдена", show_alert=True)
+        return
+
+    builder = InlineKeyboardBuilder()
+    builder.button(text="🩶 Серебристые / белые", callback_data=f"roots_silver_{orchid_id}")
+    builder.button(text="💚 Зелёные", callback_data=f"roots_green_{orchid_id}")
+    builder.button(text="◀️ Назад", callback_data=f"orchid_view_{orchid_id}")
+    builder.adjust(1)
+
     await callback.message.edit_text(
-        text,
-        reply_markup=orchid_actions_keyboard(orchid_id),
+        f"🔍 <b>Проверка корней — {orchid[2]}</b>\n\n"
+        "Посмотрите на корни через прозрачный горшок или достаньте растение.\n\n"
+        "Какого цвета корни сейчас?",
+        reply_markup=builder.as_markup(),
+        parse_mode="HTML"
+    )
+
+
+@router.callback_query(F.data.startswith("roots_silver_"))
+async def roots_silver(callback: CallbackQuery):
+    orchid_id = int(callback.data.split("_")[-1])
+    orchid = await get_orchid(orchid_id, callback.from_user.id)
+
+    builder = InlineKeyboardBuilder()
+    builder.button(text="💧 Отметить полив", callback_data=f"care_water_{orchid_id}")
+    builder.button(text="◀️ К орхидее", callback_data=f"orchid_view_{orchid_id}")
+    builder.adjust(1)
+
+    await callback.message.edit_text(
+        f"🩶 <b>Корни серебристые / белые</b>\n\n"
+        f"💧 <b>Орхидею «{orchid[2]}» нужно полить!</b>\n\n"
+        "Серебристый цвет означает что субстрат сухой и растение испытывает жажду. "
+        "Используйте погружной полив на 15–20 минут.",
+        reply_markup=builder.as_markup(),
+        parse_mode="HTML"
+    )
+
+
+@router.callback_query(F.data.startswith("roots_green_"))
+async def roots_green(callback: CallbackQuery):
+    orchid_id = int(callback.data.split("_")[-1])
+    orchid = await get_orchid(orchid_id, callback.from_user.id)
+
+    builder = InlineKeyboardBuilder()
+    builder.button(text="◀️ К орхидее", callback_data=f"orchid_view_{orchid_id}")
+
+    await callback.message.edit_text(
+        f"💚 <b>Корни зелёные</b>\n\n"
+        f"✅ <b>Орхидею «{orchid[2]}» поливать не нужно!</b>\n\n"
+        "Зелёный цвет корней говорит о достаточном количестве влаги. "
+        "Подождите пока корни не посветлеют до серебристого.",
+        reply_markup=builder.as_markup(),
+        parse_mode="HTML"
+    )
+
+
+@router.callback_query(F.data.startswith("orchid_history_"))
+async def orchid_history(callback: CallbackQuery):
+    orchid_id = int(callback.data.split("_")[-1])
+    orchid = await get_orchid(orchid_id, callback.from_user.id)
+    if not orchid:
+        await callback.answer("Орхидея не найдена", show_alert=True)
+        return
+
+    history = await get_care_history(orchid_id)
+
+    builder = InlineKeyboardBuilder()
+    builder.button(text="◀️ К орхидее", callback_data=f"orchid_view_{orchid_id}")
+
+    if not history:
+        await callback.message.edit_text(
+            f"📋 <b>История ухода — {orchid[2]}</b>\n\n"
+            "Записей пока нет. Отмечайте уход кнопками и история будет заполняться автоматически.",
+            reply_markup=builder.as_markup(),
+            parse_mode="HTML"
+        )
+        return
+
+    care_names = {"water": "💧 Полив", "fertilize": "🌿 Подкормка", "repot": "🪴 Пересадка"}
+    lines = [f"📋 <b>История ухода — {orchid[2]}</b>\n"]
+    for record in history[:20]:  # последние 20 записей
+        care_label = care_names.get(record[0], record[0])
+        lines.append(f"{care_label} — {record[1]}")
+
+    await callback.message.edit_text(
+        "\n".join(lines),
+        reply_markup=builder.as_markup(),
         parse_mode="HTML"
     )
 
