@@ -31,6 +31,16 @@ async def init_db():
                 FOREIGN KEY (user_id) REFERENCES users(telegram_id)
             )
         """)
+        await db.execute("""
+            CREATE TABLE IF NOT EXISTS care_history (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                orchid_id INTEGER NOT NULL,
+                care_type TEXT NOT NULL,
+                care_date DATE NOT NULL,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (orchid_id) REFERENCES orchids(id)
+            )
+        """)
         await db.commit()
 
 
@@ -97,12 +107,37 @@ async def update_orchid_care(orchid_id: int, care_type: str):
     field = field_map.get(care_type)
     if not field:
         return
+    today = date.today().isoformat()
     async with aiosqlite.connect(DATABASE_URL) as db:
         await db.execute(
             f"UPDATE orchids SET {field} = ? WHERE id = ?",
-            (date.today().isoformat(), orchid_id)
+            (today, orchid_id)
+        )
+        await db.execute(
+            "INSERT INTO care_history (orchid_id, care_type, care_date) VALUES (?, ?, ?)",
+            (orchid_id, care_type, today)
         )
         await db.commit()
+
+
+async def add_care_history(orchid_id: int, care_type: str):
+    from datetime import date
+    async with aiosqlite.connect(DATABASE_URL) as db:
+        await db.execute(
+            "INSERT INTO care_history (orchid_id, care_type, care_date) VALUES (?, ?, ?)",
+            (orchid_id, care_type, date.today().isoformat())
+        )
+        await db.commit()
+
+
+async def get_care_history(orchid_id: int):
+    async with aiosqlite.connect(DATABASE_URL) as db:
+        async with db.execute(
+            """SELECT care_type, care_date FROM care_history
+               WHERE orchid_id = ? ORDER BY care_date DESC, id DESC LIMIT 30""",
+            (orchid_id,)
+        ) as cursor:
+            return await cursor.fetchall()
 
 
 async def delete_orchid(orchid_id: int, user_id: int):
